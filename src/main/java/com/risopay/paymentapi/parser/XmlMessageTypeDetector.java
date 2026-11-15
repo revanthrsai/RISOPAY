@@ -7,12 +7,12 @@ import org.xml.sax.InputSource;
 
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
-import java.io.StringReader;
+import java.io.InputStream;
 
 @Component
 public class XmlMessageTypeDetector {
 
-    public String detectMessageType(String xmlPayload) throws Exception {
+    public String detectMessageType(InputStream xmlInput) throws Exception {
 
         DocumentBuilderFactory factory =
                 DocumentBuilderFactory.newInstance();
@@ -46,7 +46,7 @@ public class XmlMessageTypeDetector {
 
         Document document = factory
                 .newDocumentBuilder()
-                .parse(new InputSource(new StringReader(xmlPayload)));
+                .parse(new InputSource(xmlInput));
 
         String namespace = document
                 .getDocumentElement()

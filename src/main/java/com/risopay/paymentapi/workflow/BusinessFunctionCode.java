@@ -1,0 +1,13 @@
+package com.risopay.paymentapi.workflow;
+
+public enum BusinessFunctionCode {
+    INSTRUCTION_INTAKE,
+    XML_VALIDATION,
+    TRANSACTION_PROCESSING,
+    BUSINESS_VALIDATION,
+    REPAIR_DECISION,
+    BULK_READINESS,
+    OUT_INSTRUCTION_CREATION,
+    OUTPUT_FILE_GENERATION,
+    DELIVERY
+}

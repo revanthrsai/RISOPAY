@@ -1,7 +1,8 @@
 
 package com.risopay.paymentapi.service;
 
-import com.risopay.paymentapi.parser.PaymentDataExtractor.ExtractedTransaction;
+import com.risopay.paymentapi.model.PaymentTransaction;
+import com.risopay.paymentapi.processing.PaymentTransactionSink;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -19,19 +20,31 @@ public class PaymentBatchGrouper {
     }
 
     public List<ExtractedBatch> group(
-            List<ExtractedTransaction> transactions
+            List<PaymentTransaction> transactions
     ) {
 
-        // Rule 1: A single transaction does not require a batch.
-        if (transactions.size() <= 1) {
-            return List.of();
-        }
+        IncrementalBatchCollector collector = newIncrementalCollector();
+        transactions.forEach(collector::accept);
+        return collector.toBatches();
+    }
 
-        // Group transactions using PmtInfId.
-        Map<String, List<ExtractedTransaction>> groupedTransactions =
+    public IncrementalBatchCollector newIncrementalCollector() {
+        return new IncrementalBatchCollector();
+    }
+
+    public final class IncrementalBatchCollector
+            implements PaymentTransactionSink {
+
+        private final List<PaymentTransaction> transactions =
+                new ArrayList<>();
+
+        Map<String, List<PaymentTransaction>> groupedTransactions =
                 new LinkedHashMap<>();
 
-        for (ExtractedTransaction transaction : transactions) {
+        @Override
+        public void accept(PaymentTransaction transaction) {
+
+            transactions.add(transaction);
 
             groupedTransactions
                     .computeIfAbsent(
@@ -41,30 +54,41 @@ public class PaymentBatchGrouper {
                     .add(transaction);
         }
 
-        // Create one batch for every unique PmtInfId.
-        List<ExtractedBatch> batches = new ArrayList<>();
-
-        for (Map.Entry<String, List<ExtractedTransaction>> entry
-                : groupedTransactions.entrySet()) {
-
-            String batchId = idGenerator.newBatchId();
-
-            batches.add(
-                    new ExtractedBatch(
-                            batchId,
-                            entry.getKey(),
-                            entry.getValue()
-                    )
-            );
+        public List<PaymentTransaction> transactions() {
+            return List.copyOf(transactions);
         }
 
-        return batches;
+        public List<ExtractedBatch> toBatches() {
+
+            // Preserve the existing single-transaction rule.
+            if (transactions.size() <= 1) {
+                return List.of();
+            }
+
+            List<ExtractedBatch> batches = new ArrayList<>();
+
+            for (Map.Entry<String, List<PaymentTransaction>> entry
+                    : groupedTransactions.entrySet()) {
+
+                String batchId = idGenerator.newBatchId();
+
+                batches.add(
+                        new ExtractedBatch(
+                                batchId,
+                                entry.getKey(),
+                                entry.getValue()
+                        )
+                );
+            }
+
+            return batches;
+        }
     }
 
     public record ExtractedBatch(
             String batchId,
             String paymentInfoId,
-            List<ExtractedTransaction> transactions
+            List<PaymentTransaction> transactions
     ) {
     }
 }

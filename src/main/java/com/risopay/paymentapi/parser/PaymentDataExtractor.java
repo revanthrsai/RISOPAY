@@ -1,334 +1,428 @@
-
 package com.risopay.paymentapi.parser;
 
+import com.risopay.paymentapi.model.PaymentTransaction;
+import com.risopay.paymentapi.processing.InMemoryPaymentTransactionSink;
+import com.risopay.paymentapi.processing.PaymentTransactionSink;
 import org.springframework.stereotype.Component;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
-import org.xml.sax.InputSource;
 
-import javax.xml.XMLConstants;
-import javax.xml.parsers.DocumentBuilderFactory;
-import java.io.StringReader;
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.stream.XMLStreamConstants;
+import javax.xml.stream.XMLStreamException;
+import javax.xml.stream.XMLStreamReader;
+import java.io.InputStream;
 import java.math.BigDecimal;
-import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
+import java.util.Objects;
 
 @Component
 public class PaymentDataExtractor {
 
     public ExtractedPayment extract(
-            String xmlPayload,
+            InputStream xmlInput,
             String namespace
-    ) throws Exception {
+    ) throws XMLStreamException {
 
-        // 1. Parse the XML securely
-        DocumentBuilderFactory factory =
-                DocumentBuilderFactory.newInstance();
+        InMemoryPaymentTransactionSink transactionSink =
+                new InMemoryPaymentTransactionSink();
 
-        factory.setNamespaceAware(true);
-
-        factory.setFeature(
-                "http://apache.org/xml/features/disallow-doctype-decl",
-                true
+        ExtractionSummary summary = extract(
+                xmlInput,
+                namespace,
+                transactionSink
         );
 
-        factory.setFeature(
-                "http://xml.org/sax/features/external-general-entities",
-                false
+        return new ExtractedPayment(
+                summary.messageId(),
+                transactionSink.transactions()
         );
+    }
 
-        factory.setFeature(
-                "http://xml.org/sax/features/external-parameter-entities",
-                false
-        );
+    public ExtractionSummary extract(
+            InputStream xmlInput,
+            String namespace,
+            PaymentTransactionSink transactionSink
+    ) throws XMLStreamException {
 
-        factory.setAttribute(
-                XMLConstants.ACCESS_EXTERNAL_DTD,
-                ""
-        );
+        Objects.requireNonNull(transactionSink, "transactionSink");
 
-        factory.setAttribute(
-                XMLConstants.ACCESS_EXTERNAL_SCHEMA,
-                ""
-        );
+        XMLStreamReader reader = createSecureReader(xmlInput);
 
-        Document document = factory
-                .newDocumentBuilder()
-                .parse(new InputSource(new StringReader(xmlPayload)));
+        try {
+            GroupHeader groupHeader = null;
+            boolean customerCreditTransferInitiationFound = false;
+            int actualGroupCount = 0;
+            BigDecimal actualGroupControlSum = BigDecimal.ZERO;
 
-        // 2. Navigate to Customer Credit Transfer Initiation
-        Element root = document.getDocumentElement();
+            while (reader.hasNext()) {
+                int event = reader.next();
 
-        Element initiation = requiredChild(
-                root, "CstmrCdtTrfInitn", namespace
-        );
-
-        // 3. Extract message ID
-        Element groupHeader = requiredChild(
-                initiation, "GrpHdr", namespace
-        );
-
-        String messageId = requiredText(
-                groupHeader, "MsgId", namespace
-        );
-
-        // get total txn count
-        String declaredGroupCountText = optionalText(
-                groupHeader, "NbOfTxs", namespace
-        );
-
-        Integer declaredGroupCount =
-                declaredGroupCountText == null
-                        ? null
-                        : Integer.parseInt(declaredGroupCountText);
-
-        // get total control sum
-        String declaredControlSumText = optionalText(
-                groupHeader, "CtrlSum", namespace
-        );
-
-        BigDecimal declaredGroupControlSum =
-                declaredControlSumText == null
-                        ? null
-                        : new BigDecimal(declaredControlSumText);
-
-        // 4. Extract payment information and transactions
-        List<ExtractedTransaction> transactions = new ArrayList<>();
-        int actualGroupCount = 0;
-        BigDecimal actualGroupControlSum = BigDecimal.ZERO;
-
-        NodeList paymentInfos =
-                initiation.getElementsByTagNameNS(namespace, "PmtInf");
-
-        for (int i = 0; i < paymentInfos.getLength(); i++) {
-
-            Element paymentInfo = (Element) paymentInfos.item(i);
-
-            String paymentInfoId = requiredText(
-                    paymentInfo, "PmtInfId", namespace
-            );
-
-            String declaredPmtInfoCountText = optionalText(
-                    paymentInfo, "NbOfTxs", namespace
-            );
-
-            Integer declaredPmtInfoCount =
-                    declaredPmtInfoCountText == null
-                            ? null
-                            : Integer.parseInt(declaredPmtInfoCountText);
-
-            int actualPmtInfoCount = 0;
-
-            String declaredPmtInfoControlSumText = optionalText(
-                    paymentInfo, "CtrlSum", namespace
-            );
-
-            BigDecimal declaredPmtInfoControlSum =
-                    declaredPmtInfoControlSumText == null
-                            ? null
-                            : new BigDecimal(declaredPmtInfoControlSumText);
-
-            BigDecimal actualPmtInfoControlSum = BigDecimal.ZERO;
-
-            NodeList transactionNodes =
-                    paymentInfo.getElementsByTagNameNS(
-                            namespace, "CdtTrfTxInf"
-                    );
-
-            for (int j = 0; j < transactionNodes.getLength(); j++) {
-
-                Element transaction =
-                        (Element) transactionNodes.item(j);
-
-                // Extract EndToEndId
-                Element paymentId = requiredChild(
-                        transaction, "PmtId", namespace
-                );
-
-                String endToEndId = requiredText(
-                        paymentId, "EndToEndId", namespace
-                );
-
-                // Extract amount and currency
-                Element amount = requiredChild(
-                        transaction, "Amt", namespace
-                );
-
-                Element instructedAmount = requiredChild(
-                        amount, "InstdAmt", namespace
-                );
-
-                BigDecimal amountValue =
-                        new BigDecimal(instructedAmount.getTextContent().trim());
-
-                actualGroupControlSum =
-                        actualGroupControlSum.add(amountValue);
-
-                actualPmtInfoControlSum =
-                        actualPmtInfoControlSum.add(amountValue);
-
-                String currency =
-                        instructedAmount.getAttribute("Ccy");
-
-                if (currency.isBlank()) {
-                    throw new IllegalArgumentException(
-                            "Missing currency in instructed amount"
-                    );
+                if (event != XMLStreamConstants.START_ELEMENT
+                        || !namespace.equals(reader.getNamespaceURI())) {
+                    continue;
                 }
 
-                transactions.add(
-                        new ExtractedTransaction(
-                                paymentInfoId,
-                                endToEndId,
-                                amountValue,
-                                currency
-                        )
-                );
-                actualGroupCount++;
-                actualPmtInfoCount++;
+                String elementName = reader.getLocalName();
 
+                if ("CstmrCdtTrfInitn".equals(elementName)) {
+                    customerCreditTransferInitiationFound = true;
+                } else if ("GrpHdr".equals(elementName)) {
+                    groupHeader = readGroupHeader(reader, namespace);
+                } else if ("PmtInf".equals(elementName)) {
+                    PaymentInformationTotals paymentInformation =
+                            readPaymentInformation(
+                                    reader,
+                                    namespace,
+                                    transactionSink
+                            );
+
+                    actualGroupCount += paymentInformation.transactionCount();
+                    actualGroupControlSum = actualGroupControlSum.add(
+                            paymentInformation.controlSum()
+                    );
+                }
             }
-            if (declaredPmtInfoCount != null
-                    && declaredPmtInfoCount != actualPmtInfoCount) {
+
+            if (!customerCreditTransferInitiationFound) {
+                throw missingElement("CstmrCdtTrfInitn");
+            }
+
+            if (groupHeader == null) {
+                throw missingElement("GrpHdr");
+            }
+
+            if (groupHeader.declaredTransactionCount() != actualGroupCount) {
                 throw new IllegalArgumentException(
-                        "PmtInf transaction count mismatch for "
-                                + paymentInfoId
-                                + ". Declared: "
-                                + declaredPmtInfoCount
+                        "Transaction count mismatch. Declared: "
+                                + groupHeader.declaredTransactionCount()
                                 + ", Actual: "
-                                + actualPmtInfoCount
+                                + actualGroupCount
                 );
             }
-            if (declaredPmtInfoControlSum != null
-                    && declaredPmtInfoControlSum.compareTo(
-                    actualPmtInfoControlSum) != 0) {
+
+            if (groupHeader.declaredControlSum() != null
+                    && groupHeader.declaredControlSum().compareTo(
+                    actualGroupControlSum) != 0) {
 
                 throw new IllegalArgumentException(
-                        "PmtInf control sum mismatch for "
-                                + paymentInfoId
-                                + ". Declared: "
-                                + declaredPmtInfoControlSum
+                        "Group header control sum mismatch. Declared: "
+                                + groupHeader.declaredControlSum()
                                 + ", Actual: "
-                                + actualPmtInfoControlSum
+                                + actualGroupControlSum
                 );
             }
-        }
 
-        if (declaredGroupCount != actualGroupCount) {
-            throw new IllegalArgumentException(
-                    "Transaction count mismatch. Declared: "
-                            + declaredGroupCount
-                            + ", Actual: "
-                            + actualGroupCount
+            return new ExtractionSummary(
+                    groupHeader.messageId(),
+                    actualGroupCount
             );
+        } finally {
+            reader.close();
         }
-
-        if (declaredGroupControlSum != null
-                && declaredGroupControlSum.compareTo(actualGroupControlSum) != 0) {
-
-            throw new IllegalArgumentException(
-                    "Group header control sum mismatch. Declared: "
-                            + declaredGroupControlSum
-                            + ", Actual: "
-                            + actualGroupControlSum
-            );
-        }
-
-        return new ExtractedPayment(messageId, transactions);
-
     }
 
-    // Finds a direct child element using its namespace and local name
-    private Element requiredChild(
-            Element parent,
-            String childName,
+    private XMLStreamReader createSecureReader(
+            InputStream xmlInput
+    ) throws XMLStreamException {
+
+        XMLInputFactory factory = XMLInputFactory.newFactory();
+        factory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+        factory.setProperty(
+                XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES,
+                false
+        );
+        factory.setXMLResolver((publicId, systemId, baseUri, name) -> {
+            throw new XMLStreamException(
+                    "External XML entity resolution is disabled."
+            );
+        });
+
+        return factory.createXMLStreamReader(xmlInput);
+    }
+
+    private GroupHeader readGroupHeader(
+            XMLStreamReader reader,
             String namespace
-    ) {
+    ) throws XMLStreamException {
 
-        NodeList children = parent.getChildNodes();
+        String messageId = null;
+        Integer declaredTransactionCount = null;
+        BigDecimal declaredControlSum = null;
 
-        for (int i = 0; i < children.getLength(); i++) {
+        while (reader.hasNext()) {
+            int event = reader.next();
 
-            Node node = children.item(i);
+            if (isEndElement(reader, event, namespace, "GrpHdr")) {
+                break;
+            }
 
-            if (node instanceof Element element
-                    && childName.equals(element.getLocalName())
-                    && namespace.equals(element.getNamespaceURI())) {
+            if (!isStartElement(reader, event, namespace)) {
+                continue;
+            }
 
-                return element;
+            switch (reader.getLocalName()) {
+                case "MsgId" -> messageId = readRequiredText(reader, "MsgId");
+                case "NbOfTxs" -> declaredTransactionCount = Integer.parseInt(
+                        readRequiredText(reader, "NbOfTxs")
+                );
+                case "CtrlSum" -> declaredControlSum = new BigDecimal(
+                        readRequiredText(reader, "CtrlSum")
+                );
+                default -> {
+                    // The XSD validator has already checked other elements.
+                }
             }
         }
 
-        throw new IllegalArgumentException(
-                "Missing required XML element: " + childName
+        if (messageId == null) {
+            throw missingElement("MsgId");
+        }
+
+        return new GroupHeader(
+                messageId,
+                declaredTransactionCount,
+                declaredControlSum
         );
     }
 
-    private String requiredText(
-            Element parent,
-            String childName,
+    private PaymentInformationTotals readPaymentInformation(
+            XMLStreamReader reader,
+            String namespace,
+            PaymentTransactionSink transactionSink
+    ) throws XMLStreamException {
+
+        String paymentInfoId = null;
+        Integer declaredTransactionCount = null;
+        BigDecimal declaredControlSum = null;
+        int actualTransactionCount = 0;
+        BigDecimal actualControlSum = BigDecimal.ZERO;
+
+        while (reader.hasNext()) {
+            int event = reader.next();
+
+            if (isEndElement(reader, event, namespace, "PmtInf")) {
+                break;
+            }
+
+            if (!isStartElement(reader, event, namespace)) {
+                continue;
+            }
+
+            switch (reader.getLocalName()) {
+                case "PmtInfId" -> paymentInfoId = readRequiredText(
+                        reader,
+                        "PmtInfId"
+                );
+                case "NbOfTxs" -> declaredTransactionCount = Integer.parseInt(
+                        readRequiredText(reader, "NbOfTxs")
+                );
+                case "CtrlSum" -> declaredControlSum = new BigDecimal(
+                        readRequiredText(reader, "CtrlSum")
+                );
+                case "CdtTrfTxInf" -> {
+                    PaymentTransaction transaction = readTransaction(
+                            reader,
+                            namespace,
+                            paymentInfoId
+                    );
+
+                    transactionSink.accept(transaction);
+                    actualTransactionCount++;
+                    actualControlSum = actualControlSum.add(
+                            transaction.amount()
+                    );
+                }
+                default -> {
+                    // The XSD validator has already checked other elements.
+                }
+            }
+        }
+
+        if (paymentInfoId == null) {
+            throw missingElement("PmtInfId");
+        }
+
+        if (declaredTransactionCount != null
+                && declaredTransactionCount != actualTransactionCount) {
+            throw new IllegalArgumentException(
+                    "PmtInf transaction count mismatch for "
+                            + paymentInfoId
+                            + ". Declared: "
+                            + declaredTransactionCount
+                            + ", Actual: "
+                            + actualTransactionCount
+            );
+        }
+
+        if (declaredControlSum != null
+                && declaredControlSum.compareTo(actualControlSum) != 0) {
+
+            throw new IllegalArgumentException(
+                    "PmtInf control sum mismatch for "
+                            + paymentInfoId
+                            + ". Declared: "
+                            + declaredControlSum
+                            + ", Actual: "
+                            + actualControlSum
+            );
+        }
+
+        return new PaymentInformationTotals(
+                actualTransactionCount,
+                actualControlSum
+        );
+    }
+
+    private PaymentTransaction readTransaction(
+            XMLStreamReader reader,
+            String namespace,
+            String paymentInfoId
+    ) throws XMLStreamException {
+
+        boolean paymentIdFound = false;
+        boolean amountFound = false;
+        boolean instructedAmountFound = false;
+        String endToEndId = null;
+        BigDecimal amount = null;
+        String currency = null;
+        Deque<String> elementPath = new ArrayDeque<>();
+        elementPath.addLast("CdtTrfTxInf");
+
+        while (reader.hasNext()) {
+            int event = reader.next();
+
+            if (isEndElement(reader, event, namespace, "CdtTrfTxInf")) {
+                break;
+            }
+
+            if (event == XMLStreamConstants.START_ELEMENT) {
+                String parentElement = elementPath.peekLast();
+                String elementName = reader.getLocalName();
+                elementPath.addLast(elementName);
+
+                if (namespace.equals(reader.getNamespaceURI())
+                        && "PmtId".equals(elementName)) {
+                    paymentIdFound = true;
+                } else if (namespace.equals(reader.getNamespaceURI())
+                        && "EndToEndId".equals(elementName)
+                        && "PmtId".equals(parentElement)) {
+                    endToEndId = readRequiredText(reader, "EndToEndId");
+                    elementPath.removeLast();
+                } else if (namespace.equals(reader.getNamespaceURI())
+                        && "Amt".equals(elementName)) {
+                    amountFound = true;
+                } else if (namespace.equals(reader.getNamespaceURI())
+                        && "InstdAmt".equals(elementName)
+                        && "Amt".equals(parentElement)) {
+                    instructedAmountFound = true;
+                    currency = reader.getAttributeValue(null, "Ccy");
+                    amount = new BigDecimal(
+                            readRequiredText(reader, "InstdAmt")
+                    );
+                    elementPath.removeLast();
+                }
+            } else if (event == XMLStreamConstants.END_ELEMENT
+                    && !elementPath.isEmpty()
+                    && reader.getLocalName().equals(elementPath.peekLast())) {
+                elementPath.removeLast();
+            }
+        }
+
+        if (!paymentIdFound) {
+            throw missingElement("PmtId");
+        }
+
+        if (endToEndId == null) {
+            throw missingElement("EndToEndId");
+        }
+
+        if (!amountFound) {
+            throw missingElement("Amt");
+        }
+
+        if (!instructedAmountFound) {
+            throw missingElement("InstdAmt");
+        }
+
+        if (currency == null || currency.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Missing currency in instructed amount"
+            );
+        }
+
+        return new PaymentTransaction(
+                paymentInfoId,
+                endToEndId,
+                amount,
+                currency
+        );
+    }
+
+    private boolean isStartElement(
+            XMLStreamReader reader,
+            int event,
             String namespace
     ) {
+        return event == XMLStreamConstants.START_ELEMENT
+                && namespace.equals(reader.getNamespaceURI());
+    }
 
-        String value = requiredChild(
-                parent, childName, namespace
-        ).getTextContent().trim();
+    private boolean isEndElement(
+            XMLStreamReader reader,
+            int event,
+            String namespace,
+            String elementName
+    ) {
+        return event == XMLStreamConstants.END_ELEMENT
+                && namespace.equals(reader.getNamespaceURI())
+                && elementName.equals(reader.getLocalName());
+    }
+
+    private String readRequiredText(
+            XMLStreamReader reader,
+            String elementName
+    ) throws XMLStreamException {
+
+        String value = reader.getElementText().trim();
 
         if (value.isBlank()) {
             throw new IllegalArgumentException(
-                    "Empty XML element: " + childName
+                    "Empty XML element: " + elementName
             );
         }
 
         return value;
     }
 
-    private String optionalText(
-            Element parent,
-            String childName,
-            String namespace
-    ) {
-
-        NodeList children = parent.getChildNodes();
-
-        for (int i = 0; i < children.getLength(); i++) {
-
-            Node node = children.item(i);
-
-            if (node instanceof Element element
-                    && childName.equals(element.getLocalName())
-                    && namespace.equals(element.getNamespaceURI())) {
-
-                String value = element.getTextContent().trim();
-
-                if (value.isBlank()) {
-                    throw new IllegalArgumentException(
-                            "Empty XML element: " + childName
-                    );
-                }
-
-                return value;
-            }
-        }
-
-        return null;
+    private IllegalArgumentException missingElement(String elementName) {
+        return new IllegalArgumentException(
+                "Missing required XML element: " + elementName
+        );
     }
 
-    // Internal extracted payment data
     public record ExtractedPayment(
             String messageId,
-            List<ExtractedTransaction> transactions
+            List<PaymentTransaction> transactions
     ) {
     }
 
+    public record ExtractionSummary(
+            String messageId,
+            int transactionCount
+    ) {
+    }
 
-    public record ExtractedTransaction(
-            String paymentInfoId,
-            String endToEndId,
-            BigDecimal amount,
-            String currency
+    private record GroupHeader(
+            String messageId,
+            Integer declaredTransactionCount,
+            BigDecimal declaredControlSum
+    ) {
+    }
+
+    private record PaymentInformationTotals(
+            int transactionCount,
+            BigDecimal controlSum
     ) {
     }
 }

@@ -3,7 +3,10 @@ package com.risopay.paymentapi.controller;
 
 import com.risopay.paymentapi.dto.PaymentInstructionResponse;
 import com.risopay.paymentapi.dto.TransactionResponse;
+import com.risopay.paymentapi.input.ReplayableXmlInput;
+import com.risopay.paymentapi.model.PaymentTransaction;
 import com.risopay.paymentapi.parser.PaymentDataExtractor;
+import com.risopay.paymentapi.parser.PaymentDataExtractor.ExtractionSummary;
 import com.risopay.paymentapi.service.PaymentBatchGrouper;
 import com.risopay.paymentapi.parser.XmlMessageTypeDetector;
 import com.risopay.paymentapi.parser.XsdValidator;
@@ -12,11 +15,15 @@ import com.risopay.paymentapi.dto.BatchResponse;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import jakarta.servlet.http.HttpServletRequest;
 
 import org.xml.sax.SAXException;
 
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
-import com.risopay.paymentapi.parser.PaymentDataExtractor.ExtractedPayment;
+import java.util.Map;
 import com.risopay.paymentapi.service.IdGenerator;
 
 @RestController
@@ -53,11 +60,23 @@ public class PaymentController {
             produces = "application/json"
     )
     public PaymentInstructionResponse submitPayment(
-            @RequestBody String xmlPayload) throws Exception {
+            HttpServletRequest request) throws Exception {
+
+        ReplayableXmlInput xmlInput = (ReplayableXmlInput) request
+                .getAttribute(ReplayableXmlInput.REQUEST_ATTRIBUTE);
+
+        if (xmlInput == null) {
+            throw new IllegalStateException(
+                    "Replayable XML request input was not initialized."
+            );
+        }
 
         // 1. Detect the incoming XML namespace
-        String namespace =
-                xmlMessageTypeDetector.detectMessageType(xmlPayload);
+        String namespace;
+
+        try (InputStream inputStream = xmlInput.openStream()) {
+            namespace = xmlMessageTypeDetector.detectMessageType(inputStream);
+        }
 
         // 2. Find the supported message definition
         var definition = messageDefinitionRegistry
@@ -69,10 +88,12 @@ public class PaymentController {
 
         // 3. Validate XML against the registered XSD
         try {
-            xsdValidator.validate(
-                    xmlPayload,
-                    definition.xsdResourcePath()
-            );
+            try (InputStream inputStream = xmlInput.openStream()) {
+                xsdValidator.validate(
+                        inputStream,
+                        definition.xsdResourcePath()
+                );
+            }
         } catch (SAXException exception) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -81,13 +102,18 @@ public class PaymentController {
         }
 
         // 4. Extract actual payment information
-        ExtractedPayment extractedPayment;
+        ExtractionSummary extractionSummary;
+        PaymentBatchGrouper.IncrementalBatchCollector batchCollector =
+                paymentBatchGrouper.newIncrementalCollector();
 
         try {
-            extractedPayment = paymentDataExtractor.extract(
-                    xmlPayload,
-                    namespace
-            );
+            try (InputStream inputStream = xmlInput.openStream()) {
+                extractionSummary = paymentDataExtractor.extract(
+                        inputStream,
+                        namespace,
+                        batchCollector
+                );
+            }
         } catch (IllegalArgumentException exception) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -96,34 +122,39 @@ public class PaymentController {
         }
 
         // 5. Generate RISOPAY transaction IDs
-        List<TransactionResponse> transactions =
-                extractedPayment.transactions()
-                        .stream()
-                        .map(transaction -> new TransactionResponse(
-                                idGenerator.newTransactionId(),
-                                transaction.paymentInfoId(),
-                                transaction.endToEndId(),
-                                transaction.amount(),
-                                transaction.currency()
-                        ))
-                        .toList();
+        List<TransactionResponse> transactions = new ArrayList<>();
+        Map<String, List<TransactionResponse>> transactionsByPaymentInfo =
+                new LinkedHashMap<>();
+
+        for (PaymentTransaction transaction : batchCollector.transactions()) {
+            TransactionResponse response = new TransactionResponse(
+                    idGenerator.newTransactionId(),
+                    transaction.paymentInfoId(),
+                    transaction.endToEndId(),
+                    transaction.amount(),
+                    transaction.currency()
+            );
+
+            transactions.add(response);
+            transactionsByPaymentInfo
+                    .computeIfAbsent(
+                            transaction.paymentInfoId(),
+                            key -> new ArrayList<>()
+                    )
+                    .add(response);
+        }
 
         // 6. Group transactions into logical batches
-        var batches = paymentBatchGrouper.group(
-                extractedPayment.transactions()
-        );
+        var batches = batchCollector.toBatches();
 
         // 7. Convert grouped batches into API response objects
         List<BatchResponse> batchResponses = batches.stream()
                 .map(batch -> {
 
                     List<TransactionResponse> batchTransactions =
-                            transactions.stream()
-                                    .filter(transaction ->
-                                            transaction.getPaymentInfoId()
-                                                    .equals(batch.paymentInfoId())
-                                    )
-                                    .toList();
+                            transactionsByPaymentInfo.get(
+                                    batch.paymentInfoId()
+                            );
 
                     return new BatchResponse(
                             batch.batchId(),
@@ -141,8 +172,8 @@ public class PaymentController {
         return new PaymentInstructionResponse(
                 instructionId,
                 definition.messageType(),
-                extractedPayment.messageId(),
-                transactions.size(),
+                extractionSummary.messageId(),
+                extractionSummary.transactionCount(),
                 "RECEIVED",
                 transactions,
                 batchResponses

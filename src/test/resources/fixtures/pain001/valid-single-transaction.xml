@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03">
+    <CstmrCdtTrfInitn>
+        <GrpHdr>
+            <MsgId>VALID-TEST-MESSAGE</MsgId>
+            <CreDtTm>2026-11-15T10:00:00</CreDtTm>
+            <NbOfTxs>1</NbOfTxs>
+            <CtrlSum>100.00</CtrlSum>
+            <InitgPty>
+                <Nm>RISOPAY Test Initiator</Nm>
+            </InitgPty>
+        </GrpHdr>
+        <PmtInf>
+            <PmtInfId>VALID-TEST-PMT-INF</PmtInfId>
+            <PmtMtd>TRF</PmtMtd>
+            <NbOfTxs>1</NbOfTxs>
+            <CtrlSum>100.00</CtrlSum>
+            <ReqdExctnDt>2026-11-16</ReqdExctnDt>
+            <Dbtr>
+                <Nm>RISOPAY Test Debtor</Nm>
+            </Dbtr>
+            <DbtrAcct>
+                <Id>
+                    <Othr>
+                        <Id>TEST-DEBTOR-ACCOUNT</Id>
+                    </Othr>
+                </Id>
+            </DbtrAcct>
+            <DbtrAgt>
+                <FinInstnId>
+                    <BIC>DEUTDEFF</BIC>
+                </FinInstnId>
+            </DbtrAgt>
+            <CdtTrfTxInf>
+                <PmtId>
+                    <EndToEndId>VALID-TEST-E2E</EndToEndId>
+                </PmtId>
+                <Amt>
+                    <InstdAmt Ccy="EUR">100.00</InstdAmt>
+                </Amt>
+                <Cdtr>
+                    <Nm>RISOPAY Test Creditor</Nm>
+                </Cdtr>
+                <CdtrAcct>
+                    <Id>
+                        <Othr>
+                            <Id>TEST-CREDITOR-ACCOUNT</Id>
+                        </Othr>
+                    </Id>
+                </CdtrAcct>
+            </CdtTrfTxInf>
+        </PmtInf>
+    </CstmrCdtTrfInitn>
+</Document>

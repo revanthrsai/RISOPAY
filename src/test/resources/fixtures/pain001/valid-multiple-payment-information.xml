@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.03">
+    <CstmrCdtTrfInitn>
+        <GrpHdr>
+            <MsgId>MULTI-PMT-INF-TEST</MsgId>
+            <CreDtTm>2026-11-15T10:00:00</CreDtTm>
+            <NbOfTxs>2</NbOfTxs>
+            <CtrlSum>300.00</CtrlSum>
+            <InitgPty><Nm>RISOPAY Test Initiator</Nm></InitgPty>
+        </GrpHdr>
+        <PmtInf>
+            <PmtInfId>PMT-INF-ONE</PmtInfId>
+            <PmtMtd>TRF</PmtMtd>
+            <NbOfTxs>1</NbOfTxs>
+            <CtrlSum>100.00</CtrlSum>
+            <ReqdExctnDt>2026-11-16</ReqdExctnDt>
+            <Dbtr><Nm>Test Debtor</Nm></Dbtr>
+            <DbtrAcct><Id><Othr><Id>DEBTOR-ONE</Id></Othr></Id></DbtrAcct>
+            <DbtrAgt><FinInstnId><BIC>DEUTDEFF</BIC></FinInstnId></DbtrAgt>
+            <CdtTrfTxInf>
+                <PmtId><EndToEndId>E2E-ONE</EndToEndId></PmtId>
+                <Amt><InstdAmt Ccy="EUR">100.00</InstdAmt></Amt>
+                <Cdtr><Nm>First Creditor</Nm></Cdtr>
+                <CdtrAcct><Id><Othr><Id>CREDITOR-ONE</Id></Othr></Id></CdtrAcct>
+            </CdtTrfTxInf>
+        </PmtInf>
+        <PmtInf>
+            <PmtInfId>PMT-INF-TWO</PmtInfId>
+            <PmtMtd>TRF</PmtMtd>
+            <NbOfTxs>1</NbOfTxs>
+            <CtrlSum>200.00</CtrlSum>
+            <ReqdExctnDt>2026-11-16</ReqdExctnDt>
+            <Dbtr><Nm>Test Debtor</Nm></Dbtr>
+            <DbtrAcct><Id><Othr><Id>DEBTOR-TWO</Id></Othr></Id></DbtrAcct>
+            <DbtrAgt><FinInstnId><BIC>DEUTDEFF</BIC></FinInstnId></DbtrAgt>
+            <CdtTrfTxInf>
+                <PmtId><EndToEndId>E2E-TWO</EndToEndId></PmtId>
+                <Amt><InstdAmt Ccy="EUR">200.00</InstdAmt></Amt>
+                <Cdtr><Nm>Second Creditor</Nm></Cdtr>
+                <CdtrAcct><Id><Othr><Id>CREDITOR-TWO</Id></Othr></Id></CdtrAcct>
+            </CdtTrfTxInf>
+        </PmtInf>
+    </CstmrCdtTrfInitn>
+</Document>
