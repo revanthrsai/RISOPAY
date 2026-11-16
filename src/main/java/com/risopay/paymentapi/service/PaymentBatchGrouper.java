@@ -65,6 +65,14 @@ public class PaymentBatchGrouper {
                 return List.of();
             }
 
+            return createBatches();
+        }
+
+        public List<ExtractedBatch> toAllBatches() {
+            return createBatches();
+        }
+
+        private List<ExtractedBatch> createBatches() {
             List<ExtractedBatch> batches = new ArrayList<>();
 
             for (Map.Entry<String, List<PaymentTransaction>> entry

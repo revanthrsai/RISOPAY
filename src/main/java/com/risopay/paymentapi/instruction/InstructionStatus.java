@@ -1,0 +1,13 @@
+package com.risopay.paymentapi.instruction;
+
+public enum InstructionStatus {
+    RECEIVED,
+    XSD_VALIDATION_COMPLETED,
+    VALIDATION_RULES_COMPLETED,
+    RELEASED,
+    INVALID_XML_FORMAT,
+    UNIDENTIFIED_MESSAGE_TYPE,
+    XSD_VALIDATION_FAILED,
+    VALIDATION_RULES_FAILED,
+    REJECTED
+}

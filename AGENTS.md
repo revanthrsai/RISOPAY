@@ -46,11 +46,16 @@ Wait for the developer's confirmation before proceeding to another implementatio
 
 ## Current priority
 
-Only Stage 1 of the roadmap in `RISOPAY_MASTER_CONTEXT.md` is authorized:
+Stages 1 through 6 have been implemented and verified by the developer. The authorized next step is a small, incremental part of Stage 7: persist a successfully accepted inbound payment instruction, its pain.001 `PmtInf` batches, and its `CdtTrfTxInf` transactions in PostgreSQL.
 
-Implement bounded, replayable, temporary-file-backed XML request input while preserving existing endpoint behaviour, request-size enforcement, HTTP errors, and current processing results.
+Scope for this step:
 
-Do not start streaming XSD validation or StAX extraction until Stage 1 has been verified and approved.
+- Keep the existing endpoint, request processing, response structure, validation behaviour, and HTTP errors intact.
+- Add only the schema/entity/service/controller wiring required to record an inbound instruction, its batches, and its credit-transfer transactions.
+- Use additive Flyway migrations only; never edit a migration that has already run.
+- Generate the agreed fixed-length, 22-character inbound instruction identifier.
+- Persist only fields already extracted and validated: PmtInf ID, verified transaction count/control sum, EndToEndId, instructed amount, and currency.
+- Do not implement pain.008 debit transactions, repair, output-instruction, delivery, or AWS persistence yet.
 
 # Token & Context Rules
 - Read only the specific line ranges needed instead of entire large files.

@@ -25,6 +25,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import com.risopay.paymentapi.service.IdGenerator;
+import com.risopay.paymentapi.instruction.InstructionService;
+import com.risopay.paymentapi.persistence.PaymentInstructionPersistenceService;
 
 @RestController
 @RequestMapping("/api/v1")
@@ -36,6 +38,8 @@ public class PaymentController {
     private final PaymentDataExtractor paymentDataExtractor;
     private final PaymentBatchGrouper paymentBatchGrouper;
     private final IdGenerator idGenerator;
+    private final InstructionService instructionService;
+    private final PaymentInstructionPersistenceService paymentInstructionPersistenceService;
 
 
     public PaymentController(
@@ -44,7 +48,9 @@ public class PaymentController {
             XsdValidator xsdValidator,
             PaymentDataExtractor paymentDataExtractor,
             PaymentBatchGrouper paymentBatchGrouper,
-            IdGenerator idGenerator) {
+            IdGenerator idGenerator,
+            InstructionService instructionService,
+            PaymentInstructionPersistenceService paymentInstructionPersistenceService) {
 
         this.xmlMessageTypeDetector = xmlMessageTypeDetector;
         this.messageDefinitionRegistry = messageDefinitionRegistry;
@@ -52,6 +58,8 @@ public class PaymentController {
         this.paymentDataExtractor = paymentDataExtractor;
         this.paymentBatchGrouper = paymentBatchGrouper;
         this.idGenerator = idGenerator;
+        this.instructionService = instructionService;
+        this.paymentInstructionPersistenceService = paymentInstructionPersistenceService;
     }
 
     @PostMapping(
@@ -125,6 +133,7 @@ public class PaymentController {
         List<TransactionResponse> transactions = new ArrayList<>();
         Map<String, List<TransactionResponse>> transactionsByPaymentInfo =
                 new LinkedHashMap<>();
+        Map<PaymentTransaction, String> transactionIds = new LinkedHashMap<>();
 
         for (PaymentTransaction transaction : batchCollector.transactions()) {
             TransactionResponse response = new TransactionResponse(
@@ -136,6 +145,7 @@ public class PaymentController {
             );
 
             transactions.add(response);
+            transactionIds.put(transaction, response.getTransactionId());
             transactionsByPaymentInfo
                     .computeIfAbsent(
                             transaction.paymentInfoId(),
@@ -145,7 +155,10 @@ public class PaymentController {
         }
 
         // 6. Group transactions into logical batches
-        var batches = batchCollector.toBatches();
+        var allBatches = batchCollector.toAllBatches();
+        var batches = extractionSummary.transactionCount() <= 1
+                ? List.<PaymentBatchGrouper.ExtractedBatch>of()
+                : allBatches;
 
         // 7. Convert grouped batches into API response objects
         List<BatchResponse> batchResponses = batches.stream()
@@ -165,8 +178,16 @@ public class PaymentController {
                 })
                 .toList();
 
-        // 8. Generate RISOPAY instruction ID
-        String instructionId = idGenerator.newInstructionId();
+        // 8. Persist the accepted inbound instruction and use its business ID.
+        String instructionId = paymentInstructionPersistenceService
+                .recordReceivedPaymentInstruction(
+                        definition.messageType(),
+                        extractionSummary.messageId(),
+                        xmlInput.sizeInBytes(),
+                        allBatches,
+                        transactionIds
+                )
+                .getInstructionId();
 
         // 9. Return actual extracted information
         return new PaymentInstructionResponse(
